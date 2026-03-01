@@ -75,10 +75,14 @@ class PipelineConfig(BaseModel):
     endpoints: EndpointsConfig = Field(default_factory=EndpointsConfig)
     completion_endpoint: str | None = None
     abort_endpoint: str | None = None
+    config_cls: str | None = None
 
     def model_post_init(self, __context: Any = None) -> None:
         self._validate_general()
         self._validate_fusion()
+
+        # we set this attribute to enable saving to and loading from the same pipeline class
+        self.config_cls = self.__class__.__name__
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> PipelineConfig:
