@@ -13,7 +13,7 @@ from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import (
     Qwen3OmniMoeProcessor,
 )
 
-from sglang_omni.models.qwen3_omni.io import PipelineState
+from sglang_omni.models.qwen3_omni.payload_types import PipelineState
 from sglang_omni.models.weight_loader import resolve_model_path
 from sglang_omni.preprocessing import (
     build_audio_mm_inputs,

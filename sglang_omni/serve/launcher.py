@@ -36,7 +36,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from sglang_omni.client import Client
-from sglang_omni.config import PipelineConfig, PipelineRunner, compile_pipeline
+from sglang_omni.config import PipelineConfig, compile_pipeline
 from sglang_omni.profiler.profiler_control import ProfilerControlClient
 from sglang_omni.serve.openai_api import create_app
 
@@ -182,13 +182,13 @@ async def _run_server(
             await mp_runner.stop()
             logger.info("Pipeline stopped.")
     else:
-        # 1. Compile pipeline config -> Coordinator + Stages
         coordinator, stages = compile_pipeline(pipeline_config)
         stage_endpoints = _collect_stage_control_endpoints(stages)
-        runner = PipelineRunner(coordinator, stages)
 
-        # 2. Start the pipeline (coordinator + all stages as async tasks)
-        await runner.start()
+        # Start coordinator + all stages as async tasks
+        await coordinator.start()
+        completion_task = asyncio.create_task(coordinator.run_completion_loop())
+        stage_tasks = [asyncio.create_task(s.run()) for s in stages]
         logger.info(
             "Pipeline '%s' started (%d stages)",
             pipeline_config.name,
@@ -196,7 +196,6 @@ async def _run_server(
         )
 
         try:
-            # 3. Build Client -> FastAPI app
             cl_kwargs = client_kwargs or {}
             client = Client(coordinator, **cl_kwargs)
             app = create_app(
@@ -208,14 +207,15 @@ async def _run_server(
             profiler_ctl = ProfilerControlClient(stage_endpoints)
             _mount_profiler_routes(app, profiler_ctl, profiler_dir)
 
-            # 4. Run uvicorn
             config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
             server = uvicorn.Server(config)
-
             await server.serve()
         finally:
             logger.info("Shutting down pipeline …")
-            await runner.stop()
+            for t in stage_tasks:
+                t.cancel()
+            completion_task.cancel()
+            await coordinator.stop()
             logger.info("Pipeline stopped.")
 
 

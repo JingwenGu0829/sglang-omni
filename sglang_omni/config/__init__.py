@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 from sglang_omni.config.compiler import compile_pipeline
-from sglang_omni.config.runner import PipelineRunner
 from sglang_omni.config.schema import (
     EndpointsConfig,
     ExecutorConfig,
@@ -18,5 +17,4 @@ __all__ = [
     "InputHandlerConfig",
     "RelayConfig",
     "EndpointsConfig",
-    "PipelineRunner",
 ]
