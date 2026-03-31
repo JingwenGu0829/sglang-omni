@@ -1,25 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
-"""TTS Speed benchmark.
+"""TTS Speed benchmark for Omni models (Qwen3-Omni).
 
-Measures latency, RTF, throughput, and token throughput for TTS models via the
-/v1/audio/speech API.  Supports voice cloning (default) and plain TTS modes,
-both streaming and non-streaming.
+Measures latency, RTF, and throughput via /v1/chat/completions with
+modalities: ["text", "audio"].  Supports voice cloning (default) and
+plain TTS modes.
 
 Usage:
-    # Voice cloning, non-streaming
-    python benchmarks/eval/benchmark_tts_speed.py \
-        --model fishaudio/s2-pro --port 8000 \
+    # Voice cloning (default)
+    python benchmarks/eval/benchmark_omni_tts_speed.py \
+        --model qwen3-omni --port 8000 \
         --testset seedtts_testset/en/meta.lst --max-samples 10
 
-    # Voice cloning, streaming
-    python benchmarks/eval/benchmark_tts_speed.py \
-        --model fishaudio/s2-pro --port 8000 \
-        --testset seedtts_testset/en/meta.lst --max-samples 10 --stream
-
-    # Plain TTS, non-streaming
-    python benchmarks/eval/benchmark_tts_speed.py \
-        --model fishaudio/s2-pro --port 8000 \
+    # Plain TTS (no voice cloning)
+    python benchmarks/eval/benchmark_omni_tts_speed.py \
+        --model qwen3-omni --port 8000 \
         --testset seedtts_testset/en/meta.lst --max-samples 10 --no-ref-audio
+
+    # Concurrency test
+    python benchmarks/eval/benchmark_omni_tts_speed.py \
+        --model qwen3-omni --port 8000 \
+        --testset seedtts_testset/en/meta.lst --max-samples 10 --max-concurrency 4
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from benchmarks.benchmarker.utils import wait_for_service
 from benchmarks.dataset.seedtts import load_seedtts_samples
 from benchmarks.metrics.performance import compute_speed_metrics
 from benchmarks.tasks.tts_speed import (
-    make_tts_send_fn,
+    make_omni_tts_send_fn,
     print_speed_summary,
     save_speed_results,
 )
@@ -52,13 +52,12 @@ logger = logging.getLogger(__name__)
 
 async def benchmark(args: argparse.Namespace) -> None:
     base_url = args.base_url or f"http://{args.host}:{args.port}"
+    api_url = f"{base_url}/v1/chat/completions"
 
     if not os.path.isfile(args.testset):
         logger.error("Testset not found: %s", args.testset)
         return
 
-    # Note (Chenyang): We use the seed-tts-eval dataset by default.
-    # TODO (Chenyang): Make datasets configurable.
     samples = load_seedtts_samples(args.testset, args.max_samples)
     logger.info("Prepared %d requests", len(samples))
 
@@ -67,27 +66,15 @@ async def benchmark(args: argparse.Namespace) -> None:
         save_audio_dir = os.path.join(args.output_dir, "audio")
         os.makedirs(save_audio_dir, exist_ok=True)
 
-    api_url = f"{base_url}/v1/audio/speech"
-
-    gen_kwargs: dict = {}
-    if args.max_new_tokens is not None:
-        gen_kwargs["max_new_tokens"] = args.max_new_tokens
-    if args.temperature is not None:
-        gen_kwargs["temperature"] = args.temperature
-    if args.top_p is not None:
-        gen_kwargs["top_p"] = args.top_p
-    if args.top_k is not None:
-        gen_kwargs["top_k"] = args.top_k
-    if args.repetition_penalty is not None:
-        gen_kwargs["repetition_penalty"] = args.repetition_penalty
-
-    send_fn = make_tts_send_fn(
+    send_fn = make_omni_tts_send_fn(
         args.model,
         api_url,
-        stream=args.stream,
-        no_ref_audio=args.no_ref_audio,
+        lang=args.lang,
+        voice_clone=not args.no_ref_audio,
+        speaker=args.speaker,
+        max_tokens=args.max_new_tokens,
+        temperature=args.temperature,
         save_audio_dir=save_audio_dir,
-        **gen_kwargs,
     )
 
     runner = BenchmarkRunner(
@@ -109,7 +96,8 @@ async def benchmark(args: argparse.Namespace) -> None:
             "base_url": base_url,
             "testset": args.testset,
             "no_ref_audio": args.no_ref_audio,
-            "stream": args.stream,
+            "lang": args.lang,
+            "speaker": args.speaker,
             "max_samples": args.max_samples,
             "max_new_tokens": args.max_new_tokens,
             "warmup": args.warmup,
@@ -121,7 +109,7 @@ async def benchmark(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Benchmark online serving for TTS models."
+        description="Benchmark TTS speed for Omni models (Qwen3-Omni)."
     )
     parser.add_argument(
         "--base-url",
@@ -134,30 +122,38 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=str,
-        default="fishaudio/s2-pro",
+        default="qwen3-omni",
         help="Model name for the API request.",
+    )
+    parser.add_argument(
+        "--lang",
+        type=str,
+        choices=["en", "zh"],
+        default="en",
+        help="Language for prompt construction.",
+    )
+    parser.add_argument(
+        "--speaker",
+        type=str,
+        default="Ethan",
+        choices=["Ethan", "Chelsie", "Aiden"],
+        help="Speaker voice for TTS.",
     )
     parser.add_argument(
         "--testset",
         type=str,
         default="seed-tts-eval/en/meta.lst",
-        help=(
-            "Path to a meta.lst file (one sample per line).  "
-            "Accepts any dataset in seed-tts-eval format."
-        ),
+        help="Path to a meta.lst file (seed-tts-eval format).",
     )
     parser.add_argument(
         "--no-ref-audio",
         action="store_true",
-        help="Skip ref audio/text from testset (TTS without voice cloning).",
+        help="Skip ref audio/text (TTS without voice cloning).",
     )
-    parser.add_argument("--output-dir", type=str, default="results/tts_speed")
+    parser.add_argument("--output-dir", type=str, default="results/omni_tts_speed")
     parser.add_argument("--max-samples", type=int, default=None)
-    parser.add_argument("--max-new-tokens", type=int, default=2048)
-    parser.add_argument("--temperature", type=float, default=None)
-    parser.add_argument("--top-p", type=float, default=None)
-    parser.add_argument("--top-k", type=int, default=None)
-    parser.add_argument("--repetition-penalty", type=float, default=None)
+    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument(
         "--max-concurrency",
@@ -173,11 +169,6 @@ def main() -> None:
     )
     parser.add_argument(
         "--save-audio", action="store_true", help="Save generated WAV files."
-    )
-    parser.add_argument(
-        "--stream",
-        action="store_true",
-        help="Send requests with stream=true (SSE audio chunks).",
     )
     parser.add_argument("--disable-tqdm", action="store_true")
     args = parser.parse_args()
