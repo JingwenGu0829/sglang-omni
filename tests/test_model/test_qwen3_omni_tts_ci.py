@@ -4,8 +4,7 @@
 Usage:
     pytest tests/test_model/test_qwen3_omni_tts_ci.py -s -x
 
-Author:
-    Jingwen Guo https://github.com/JingwenGu0829
+No streaming supported yet.
 """
 
 from __future__ import annotations
@@ -34,16 +33,14 @@ WER_TIMEOUT = 600
 # ---------------------------------------------------------------------------
 # Speed thresholds
 # ---------------------------------------------------------------------------
-# Qwen3-Omni uses /v1/chat/completions (non-streaming only for now).
-# Baseline measured on H200: VC RTF ~1.78.
 
-VC_NON_STREAM_MAX_RTF = 3.5
+
+VC_NON_STREAM_MAX_RTF = 2.2
 
 # ---------------------------------------------------------------------------
 # WER thresholds
 # ---------------------------------------------------------------------------
-# Baseline measured on H200 with seedtts-mini (10 samples):
-# corpus WER = 3.77%, worst per-sample = 25%.
+
 
 VC_WER_MAX_CORPUS = 0.06
 VC_WER_MAX_PER_SAMPLE = 0.30
