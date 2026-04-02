@@ -36,7 +36,15 @@ from benchmarks.eval.benchmark_tts_speed import (
     TtsSpeedBenchmarkConfig,
     run_tts_speed_benchmark,
 )
-from tests.utils import find_free_port, start_server, stop_server
+from tests.utils import (
+    assert_per_request_fields,
+    assert_summary_metrics,
+    assert_wer_results,
+    find_free_port,
+    no_proxy_env,
+    start_server,
+    stop_server,
+)
 
 PER_REQUEST_STORE: dict[str, list[dict]] = {}
 SPEED_OUTPUT_DIRS: dict[str, dict[int, str]] = {"non_stream": {}, "stream": {}}
@@ -199,9 +207,6 @@ def _run_benchmark(
     return speed_results
 
 
-def _no_proxy_env() -> dict[str, str]:
-    proxy_keys = {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
-    return {k: v for k, v in os.environ.items() if k.lower() not in proxy_keys}
 
 
 def _run_wer_transcribe(
@@ -235,7 +240,7 @@ def _run_wer_transcribe(
         cmd,
         text=True,
         timeout=WER_TIMEOUT,
-        env=_no_proxy_env(),
+        env=no_proxy_env(),
     )
     assert result.returncode == 0, f"WER transcribe failed (rc={result.returncode})"
 
@@ -314,38 +319,6 @@ def wer_input_dirs(server_process: subprocess.Popen) -> dict[str, dict[int, str]
     return SPEED_OUTPUT_DIRS
 
 
-def _assert_summary_metrics(summary: dict) -> None:
-    """Verify summary-level sanity invariants that must hold for every run."""
-    assert (
-        summary["failed_requests"] == 0
-    ), f"Expected 0 failed requests, got {summary['failed_requests']}"
-    assert (
-        summary["audio_duration_mean_s"] > 0
-    ), f"Expected positive audio duration, got {summary['audio_duration_mean_s']}"
-    assert (
-        summary.get("gen_tokens_mean", 0) > 0
-    ), f"Expected positive gen_tokens_mean, got {summary.get('gen_tokens_mean', 0)}"
-    assert (
-        summary.get("prompt_tokens_mean", 0) > 0
-    ), f"Expected positive prompt_tokens_mean, got {summary.get('prompt_tokens_mean', 0)}"
-
-
-def _assert_per_request_fields(per_request: list[dict]) -> None:
-    """Verify every request has valid audio, prompt_tokens, and completion_tokens."""
-    for req in per_request:
-        rid = req["id"]
-        assert req["is_success"], f"Request {rid} failed: {req.get('error')}"
-        assert (
-            req["audio_duration_s"] is not None and req["audio_duration_s"] > 0
-        ), f"Request {rid}: audio_duration_s={req['audio_duration_s']}, expected > 0"
-        assert (
-            req["prompt_tokens"] is not None and req["prompt_tokens"] > 0
-        ), f"Request {rid}: prompt_tokens={req['prompt_tokens']}, expected > 0"
-        assert (
-            req["completion_tokens"] is not None and req["completion_tokens"] > 0
-        ), f"Request {rid}: completion_tokens={req['completion_tokens']}, expected > 0"
-
-
 def _assert_streaming_consistency(
     non_stream_requests: list[dict],
     stream_requests: list[dict],
@@ -416,45 +389,6 @@ def _assert_streaming_consistency(
     )
 
 
-def _assert_wer_results(
-    results: dict,
-    max_corpus_wer: float,
-    max_per_sample_wer: float,
-) -> None:
-    summary = results["summary"]
-    per_sample = results["per_sample"]
-
-    failed_details = [
-        f"  sample {s['id']}: {s.get('error')}"
-        for s in per_sample
-        if not s.get("is_success", True)
-    ]
-    assert summary["evaluated"] == summary["total_samples"], (
-        f"Only {summary['evaluated']}/{summary['total_samples']} samples evaluated, "
-        f"{summary['skipped']} skipped.\n"
-        f"Per-sample errors:\n" + "\n".join(failed_details)
-    )
-
-    assert summary["wer_corpus"] <= max_corpus_wer, (
-        f"Corpus WER {summary['wer_corpus']:.4f} ({summary['wer_corpus'] * 100:.2f}%) "
-        f"> threshold {max_corpus_wer} ({max_corpus_wer * 100:.0f}%)"
-    )
-
-    assert summary["n_above_50_pct_wer"] == 0, (
-        f"{summary['n_above_50_pct_wer']} samples have >50% WER — "
-        f"expected 0 catastrophic failures"
-    )
-
-    for sample in per_sample:
-        assert sample[
-            "is_success"
-        ], f"Sample {sample['id']} failed: {sample.get('error')}"
-        if sample["wer"] is not None:
-            assert (
-                sample["wer"] <= max_per_sample_wer
-            ), f"Sample {sample['id']} WER {sample['wer']:.4f} > {max_per_sample_wer}"
-
-
 def _assert_speed_thresholds(summary: dict, thresholds: dict, concurrency: int) -> None:
     level_thresholds = thresholds[concurrency]
     assert summary["throughput_qps"] >= level_thresholds["throughput_qps_min"], (
@@ -473,6 +407,7 @@ def _assert_speed_thresholds(summary: dict, thresholds: dict, concurrency: int) 
         f"rtf_mean {summary['rtf_mean']} > "
         f"{level_thresholds['rtf_mean_max']} at concurrency {concurrency}"
     )
+
 
 
 @pytest.mark.benchmark
@@ -495,8 +430,8 @@ def test_voice_cloning_non_streaming(
             concurrency=concurrency,
         )
         summary, per_request = results["summary"], results["per_request"]
-        _assert_summary_metrics(summary)
-        _assert_per_request_fields(per_request)
+        assert_summary_metrics(summary)
+        assert_per_request_fields(per_request)
         PER_REQUEST_STORE[f"vc_nonstream_c{concurrency}"] = per_request
         SPEED_OUTPUT_DIRS["non_stream"][concurrency] = output_dir
         _assert_speed_thresholds(summary, VC_NON_STREAM_THRESHOLDS, concurrency)
@@ -526,8 +461,8 @@ def test_voice_cloning_streaming(
             stream=True,
         )
         summary, per_request = results["summary"], results["per_request"]
-        _assert_summary_metrics(summary)
-        _assert_per_request_fields(per_request)
+        assert_summary_metrics(summary)
+        assert_per_request_fields(per_request)
         PER_REQUEST_STORE[f"vc_stream_c{concurrency}"] = per_request
         SPEED_OUTPUT_DIRS["stream"][concurrency] = output_dir
         _assert_speed_thresholds(summary, VC_STREAM_THRESHOLDS, concurrency)
@@ -562,7 +497,7 @@ def test_voice_cloning_wer(
             str(dataset_dir / "en" / "meta.lst"),
             wer_input_dirs["non_stream"][concurrency],
         )
-        _assert_wer_results(results, VC_WER_MAX_CORPUS, VC_WER_MAX_PER_SAMPLE)
+        assert_wer_results(results, VC_WER_MAX_CORPUS, VC_WER_MAX_PER_SAMPLE)
 
 
 @pytest.mark.benchmark
@@ -583,7 +518,7 @@ def test_voice_cloning_streaming_wer(
             wer_input_dirs["stream"][concurrency],
             stream=True,
         )
-        _assert_wer_results(
+        assert_wer_results(
             results, VC_STREAM_WER_MAX_CORPUS, VC_STREAM_WER_MAX_PER_SAMPLE
         )
 

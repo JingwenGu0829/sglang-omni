@@ -107,8 +107,6 @@ def make_omni_tts_send_fn(
                 result.wav_path = path
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             result.error = str(exc)
-        except Exception as exc:
-            result.error = str(exc)
         finally:
             result.latency_s = time.perf_counter() - start_time
         return result

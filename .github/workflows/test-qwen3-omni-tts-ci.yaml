@@ -45,7 +45,7 @@ jobs:
           source omni-qwen3/bin/activate
           uv pip install -v -e ".[dev]"
 
-      - name: Run Qwen3-Omni TTS CI (speed + concurrency + WER)
+      - name: Run Qwen3-Omni TTS CI (speed + WER)
         timeout-minutes: 60
         shell: bash
         run: |

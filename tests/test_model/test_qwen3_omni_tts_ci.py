@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Speed benchmarks, concurrency validation, and voice-clone WER CI for Qwen3-Omni.
+"""Speed benchmarks and voice-clone WER CI for Qwen3-Omni.
 
 Usage:
     pytest tests/test_model/test_qwen3_omni_tts_ci.py -s -x
@@ -10,8 +10,6 @@ No streaming supported yet.
 from __future__ import annotations
 
 import json
-import os
-import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -20,8 +18,15 @@ import pytest
 
 from benchmarks.benchmarker.utils import wait_for_service
 from benchmarks.dataset.prepare import DATASETS, download_dataset
-from tests.test_model.helpers import disable_proxy
-from tests.utils import find_free_port
+from tests.utils import (
+    assert_per_request_fields,
+    assert_summary_metrics,
+    assert_wer_results,
+    disable_proxy,
+    find_free_port,
+    no_proxy_env,
+    stop_server,
+)
 
 MODEL_PATH = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 MAX_SAMPLES = 10
@@ -30,17 +35,7 @@ STARTUP_TIMEOUT = 900
 BENCHMARK_TIMEOUT = 600
 WER_TIMEOUT = 600
 
-# ---------------------------------------------------------------------------
-# Speed thresholds
-# ---------------------------------------------------------------------------
-
-
 VC_NON_STREAM_MAX_RTF = 2.2
-
-# ---------------------------------------------------------------------------
-# WER thresholds
-# ---------------------------------------------------------------------------
-
 
 VC_WER_MAX_CORPUS = 0.06
 VC_WER_MAX_PER_SAMPLE = 0.30
@@ -58,11 +53,6 @@ WER_SCRIPT = str(
     / "eval"
     / "voice_clone_qwen3_omni_wer.py"
 )
-
-
-def _no_proxy_env() -> dict[str, str]:
-    proxy_keys = {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
-    return {k: v for k, v in os.environ.items() if k.lower() not in proxy_keys}
 
 
 def _run_benchmark(
@@ -93,7 +83,7 @@ def _run_benchmark(
         capture_output=True,
         text=True,
         timeout=BENCHMARK_TIMEOUT,
-        env=_no_proxy_env(),
+        env=no_proxy_env(),
     )
     assert proc_result.returncode == 0, (
         f"Benchmark failed (rc={proc_result.returncode}).\n"
@@ -144,7 +134,7 @@ def _run_wer_generate(
         capture_output=True,
         text=True,
         timeout=WER_TIMEOUT,
-        env=_no_proxy_env(),
+        env=no_proxy_env(),
     )
     assert result.returncode == 0, (
         f"WER generate failed (rc={result.returncode}).\n"
@@ -180,7 +170,7 @@ def _run_wer_transcribe(
         capture_output=True,
         text=True,
         timeout=WER_TIMEOUT,
-        env=_no_proxy_env(),
+        env=no_proxy_env(),
     )
     assert result.returncode == 0, (
         f"WER transcribe failed (rc={result.returncode}).\n"
@@ -210,21 +200,6 @@ def _run_wer_transcribe(
                 print(f"  FAILED sample {sample['id']}: {sample.get('error')}")
 
     return wer_results
-
-
-def _kill_server(proc: subprocess.Popen) -> None:
-    """Kill the server process group, tolerating already-dead processes."""
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        proc.wait(timeout=30)
-    except (ProcessLookupError, ChildProcessError):
-        pass
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            proc.wait(timeout=10)
-        except (ProcessLookupError, ChildProcessError):
-            pass
 
 
 @pytest.fixture(scope="module")
@@ -264,7 +239,7 @@ def server_process(tmp_path_factory: pytest.TempPathFactory):
             cmd,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            preexec_fn=os.setsid,
+            start_new_session=True,
         )
         proc.port = port
 
@@ -279,7 +254,7 @@ def server_process(tmp_path_factory: pytest.TempPathFactory):
                     health_body_contains="healthy",
                 )
         except TimeoutError:
-            _kill_server(proc)
+            stop_server(proc)
             server_log = log_file.read_text()
             pytest.fail(
                 f"Server did not become healthy within {STARTUP_TIMEOUT}s.\n"
@@ -290,7 +265,7 @@ def server_process(tmp_path_factory: pytest.TempPathFactory):
 
         yield proc
 
-        _kill_server(proc)
+        stop_server(proc)
 
 
 @pytest.fixture(scope="module")
@@ -310,74 +285,9 @@ def wer_audio_dir(
         voice_clone=True,
     )
 
-    _kill_server(server_process)
+    stop_server(server_process)
 
     return str(tmp / "vc")
-
-
-def _assert_summary_metrics(summary: dict) -> None:
-    """Verify summary-level sanity invariants that must hold for every run."""
-    assert (
-        summary["failed_requests"] == 0
-    ), f"Expected 0 failed requests, got {summary['failed_requests']}"
-    assert (
-        summary["audio_duration_mean_s"] > 0
-    ), f"Expected positive audio duration, got {summary['audio_duration_mean_s']}"
-
-
-def _assert_per_request_fields(per_request: list[dict]) -> None:
-    """Verify every request has valid audio."""
-    for req in per_request:
-        rid = req["id"]
-        assert req["is_success"], f"Request {rid} failed: {req.get('error')}"
-        assert (
-            req["audio_duration_s"] is not None and req["audio_duration_s"] > 0
-        ), f"Request {rid}: audio_duration_s={req['audio_duration_s']}, expected > 0"
-
-
-def _assert_wer_results(
-    results: dict,
-    max_corpus_wer: float,
-    max_per_sample_wer: float,
-) -> None:
-    summary = results["summary"]
-    per_sample = results["per_sample"]
-
-    failed_details = [
-        f"  sample {s['id']}: {s.get('error')}"
-        for s in per_sample
-        if not s.get("is_success", True)
-    ]
-    assert summary["evaluated"] == summary["total_samples"], (
-        f"Only {summary['evaluated']}/{summary['total_samples']} samples evaluated, "
-        f"{summary['skipped']} skipped.\n"
-        f"Per-sample errors:\n" + "\n".join(failed_details)
-    )
-
-    assert summary["wer_corpus"] <= max_corpus_wer, (
-        f"Corpus WER {summary['wer_corpus']:.4f} ({summary['wer_corpus'] * 100:.2f}%) "
-        f"> threshold {max_corpus_wer} ({max_corpus_wer * 100:.0f}%)"
-    )
-
-    assert summary["n_above_50_pct_wer"] == 0, (
-        f"{summary['n_above_50_pct_wer']} samples have >50% WER — "
-        f"expected 0 catastrophic failures"
-    )
-
-    for sample in per_sample:
-        assert sample[
-            "is_success"
-        ], f"Sample {sample['id']} failed: {sample.get('error')}"
-        if sample["wer"] is not None:
-            assert sample["wer"] <= max_per_sample_wer, (
-                f"Sample {sample['id']} WER {sample['wer']:.4f} "
-                f"> {max_per_sample_wer}"
-            )
-
-
-# ---------------------------------------------------------------------------
-# Speed tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.benchmark
@@ -392,16 +302,11 @@ def test_voice_cloning_non_streaming(
         str(tmp_path / "vc_nonstream"),
     )
     summary, per_request = results["summary"], results["per_request"]
-    _assert_summary_metrics(summary)
-    _assert_per_request_fields(per_request)
+    assert_summary_metrics(summary, check_tokens=False)
+    assert_per_request_fields(per_request, check_tokens=False)
     assert (
         summary["rtf_mean"] <= VC_NON_STREAM_MAX_RTF
     ), f"rtf_mean {summary['rtf_mean']} > {VC_NON_STREAM_MAX_RTF}"
-
-
-# ---------------------------------------------------------------------------
-# WER tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.benchmark
@@ -413,7 +318,7 @@ def test_voice_cloning_wer(
         str(dataset_dir / "en" / "meta.lst"),
         wer_audio_dir,
     )
-    _assert_wer_results(results, VC_WER_MAX_CORPUS, VC_WER_MAX_PER_SAMPLE)
+    assert_wer_results(results, VC_WER_MAX_CORPUS, VC_WER_MAX_PER_SAMPLE)
 
 
 if __name__ == "__main__":

@@ -389,6 +389,8 @@ class SGLangOutputProcessor:
         if self._model is not None and self._capture_hidden_layers:
             aux = getattr(self._model, "_captured_aux_hidden_states", None)
             if aux is not None:
+                # aux is a list of tensors from layers_to_capture, one per layer
+                self._model._captured_aux_hidden_states = None  # consume
                 result = {}
                 for layer_id, tensor in zip(self._capture_hidden_layers, aux):
                     key = "embed" if layer_id == 0 else layer_id
