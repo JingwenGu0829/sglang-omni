@@ -659,6 +659,15 @@ def create_decode_executor(model_path: str) -> PreprocessingExecutor:
                 result["text"] = tokenizer.decode(output_ids, skip_special_tokens=True)
                 result.setdefault("modality", "text")
 
+        # Propagate thinker token counts for usage tracking
+        prompt_tokens = int(thinker_out.get("prompt_tokens", 0))
+        completion_tokens = int(thinker_out.get("completion_tokens", 0))
+        result["usage"] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+
         payload.data = result
         return payload
 

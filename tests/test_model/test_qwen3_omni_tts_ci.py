@@ -29,13 +29,50 @@ from tests.utils import (
 )
 
 MODEL_PATH = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
+
+# TODO(Chenyang): Currently we only run concurrency=1 and a small dataset
+# (seedtts-mini, 10 samples). Support higher concurrency and larger datasets
+# once the Qwen3-Omni pipeline is optimized for concurrent requests.
+CONCURRENCY = 1
 MAX_SAMPLES = 10
 
 STARTUP_TIMEOUT = 900
 BENCHMARK_TIMEOUT = 600
 WER_TIMEOUT = 600
 
-VC_NON_STREAM_MAX_RTF = 2.2
+# --- Threshold reference values (P95 from baseline runs) ---
+# Slack factors applied to P95 reference values to derive CI thresholds.
+# Higher-is-better metrics (throughput): threshold = P95 x slack_higher
+# Lower-is-better metrics (latency, rtf): threshold = P95 x slack_lower
+THRESHOLD_SLACK_HIGHER = 0.75
+THRESHOLD_SLACK_LOWER = 1.25
+
+# Note (Chenyang): P95 values measured on H20 CI machines with concurrency=1,
+# seedtts-mini dataset (5 samples). Update these when hardware or model changes.
+_VC_NON_STREAM_P95 = {
+    1: {
+        "latency_mean_s": 6.0,
+        "rtf_mean": 2.0,
+    },
+}
+
+
+def _apply_slack(
+    p95: dict[int, dict[str, float]],
+    slack_higher: float = THRESHOLD_SLACK_HIGHER,
+    slack_lower: float = THRESHOLD_SLACK_LOWER,
+) -> dict[int, dict[str, float]]:
+    """Derive CI thresholds from P95 references with uniform slack."""
+    result: dict[int, dict[str, float]] = {}
+    for conc, m in p95.items():
+        result[conc] = {
+            "latency_mean_s_max": round(m["latency_mean_s"] * slack_lower, 1),
+            "rtf_mean_max": round(m["rtf_mean"] * slack_lower, 2),
+        }
+    return result
+
+
+VC_NON_STREAM_THRESHOLDS = _apply_slack(_VC_NON_STREAM_P95)
 
 VC_WER_MAX_CORPUS = 0.06
 VC_WER_MAX_PER_SAMPLE = 0.30
@@ -202,6 +239,18 @@ def _run_wer_transcribe(
     return wer_results
 
 
+def _assert_speed_thresholds(summary: dict, thresholds: dict, concurrency: int) -> None:
+    level_thresholds = thresholds[concurrency]
+    assert summary["latency_mean_s"] <= level_thresholds["latency_mean_s_max"], (
+        f"latency_mean_s {summary['latency_mean_s']} > "
+        f"{level_thresholds['latency_mean_s_max']} at concurrency {concurrency}"
+    )
+    assert summary["rtf_mean"] <= level_thresholds["rtf_mean_max"], (
+        f"rtf_mean {summary['rtf_mean']} > "
+        f"{level_thresholds['rtf_mean_max']} at concurrency {concurrency}"
+    )
+
+
 @pytest.fixture(scope="module")
 def dataset_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("seed_tts_eval") / "data"
@@ -302,14 +351,9 @@ def test_voice_cloning_non_streaming(
         str(tmp_path / "vc_nonstream"),
     )
     summary, per_request = results["summary"], results["per_request"]
-    # TODO(Chenyang): Voice-cloning uses the Code2Wav executor path which
-    # bypasses standard chat completions usage tracking; token counts are
-    # not available yet.
-    assert_summary_metrics(summary, check_tokens=False)
-    assert_per_request_fields(per_request, check_tokens=False)
-    assert (
-        summary["rtf_mean"] <= VC_NON_STREAM_MAX_RTF
-    ), f"rtf_mean {summary['rtf_mean']} > {VC_NON_STREAM_MAX_RTF}"
+    assert_summary_metrics(summary)
+    assert_per_request_fields(per_request)
+    _assert_speed_thresholds(summary, VC_NON_STREAM_THRESHOLDS, CONCURRENCY)
 
 
 @pytest.mark.benchmark
