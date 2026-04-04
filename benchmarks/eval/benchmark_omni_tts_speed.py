@@ -29,6 +29,7 @@ import logging
 import os
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -40,7 +41,11 @@ from benchmarks.benchmarker.runner import BenchmarkRunner, RunConfig, SendFn
 from benchmarks.benchmarker.utils import get_wav_duration, wait_for_service
 from benchmarks.dataset.seedtts import SampleInput, load_seedtts_samples
 from benchmarks.metrics.performance import compute_speed_metrics
-from benchmarks.tasks.tts_speed import print_speed_summary, save_speed_results
+from benchmarks.tasks.tts_speed import (
+    build_speed_results,
+    print_speed_summary,
+    save_speed_results,
+)
 from benchmarks.tasks.voice_clone import VoiceCloneOmni
 
 logging.basicConfig(
@@ -50,6 +55,51 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TEXT_PREVIEW_LENGTH = 60
+
+
+@dataclass
+class OmniTtsSpeedBenchmarkConfig:
+    model: str
+    testset: str
+    base_url: str | None = None
+    host: str = "localhost"
+    port: int = 8000
+    lang: str = "en"
+    speaker: str = "Ethan"
+    no_ref_audio: bool = False
+    output_dir: str | None = None
+    max_samples: int | None = None
+    max_new_tokens: int = 256
+    temperature: float = 0.7
+    warmup: int = 1
+    max_concurrency: int = 1
+    request_rate: float = float("inf")
+    save_audio: bool = False
+    disable_tqdm: bool = False
+
+
+def _build_base_url(config: OmniTtsSpeedBenchmarkConfig) -> str:
+    return config.base_url or f"http://{config.host}:{config.port}"
+
+
+def _build_results_config(
+    config: OmniTtsSpeedBenchmarkConfig,
+    *,
+    base_url: str,
+) -> dict:
+    return {
+        "model": config.model,
+        "base_url": base_url,
+        "testset": config.testset,
+        "no_ref_audio": config.no_ref_audio,
+        "lang": config.lang,
+        "speaker": config.speaker,
+        "max_samples": config.max_samples,
+        "max_new_tokens": config.max_new_tokens,
+        "warmup": config.warmup,
+        "max_concurrency": config.max_concurrency,
+        "request_rate": config.request_rate,
+    }
 
 
 def make_omni_tts_send_fn(
@@ -122,61 +172,79 @@ def make_omni_tts_send_fn(
     return send_fn
 
 
-async def benchmark(args: argparse.Namespace) -> None:
-    base_url = args.base_url or f"http://{args.host}:{args.port}"
+async def run_omni_tts_speed_benchmark(
+    config: OmniTtsSpeedBenchmarkConfig,
+) -> dict:
+    if not os.path.isfile(config.testset):
+        raise FileNotFoundError(f"Testset not found: {config.testset}")
+
+    base_url = _build_base_url(config)
     api_url = f"{base_url}/v1/chat/completions"
 
-    if not os.path.isfile(args.testset):
-        logger.error("Testset not found: %s", args.testset)
-        return
-
-    samples = load_seedtts_samples(args.testset, args.max_samples)
+    samples = load_seedtts_samples(config.testset, config.max_samples)
     logger.info("Prepared %d requests", len(samples))
 
     save_audio_dir = None
-    if args.save_audio and args.output_dir:
-        save_audio_dir = os.path.join(args.output_dir, "audio")
+    if config.save_audio and config.output_dir:
+        save_audio_dir = os.path.join(config.output_dir, "audio")
         os.makedirs(save_audio_dir, exist_ok=True)
 
     send_fn = make_omni_tts_send_fn(
-        args.model,
+        config.model,
         api_url,
-        lang=args.lang,
-        voice_clone=not args.no_ref_audio,
-        speaker=args.speaker,
-        max_tokens=args.max_new_tokens,
-        temperature=args.temperature,
+        lang=config.lang,
+        voice_clone=not config.no_ref_audio,
+        speaker=config.speaker,
+        max_tokens=config.max_new_tokens,
+        temperature=config.temperature,
         save_audio_dir=save_audio_dir,
     )
 
     runner = BenchmarkRunner(
         RunConfig(
-            max_concurrency=args.max_concurrency,
-            request_rate=args.request_rate,
-            warmup=args.warmup,
-            disable_tqdm=args.disable_tqdm,
+            max_concurrency=config.max_concurrency,
+            request_rate=config.request_rate,
+            warmup=config.warmup,
+            disable_tqdm=config.disable_tqdm,
         )
     )
     outputs = await runner.run(samples, send_fn)
 
     metrics = compute_speed_metrics(outputs, wall_clock_s=runner.wall_clock_s)
-    print_speed_summary(metrics, args.model)
+    results_config = _build_results_config(config, base_url=base_url)
+    benchmark_results = build_speed_results(outputs, metrics, results_config)
+    if config.output_dir:
+        save_speed_results(outputs, metrics, results_config, config.output_dir)
+    return benchmark_results
 
-    if args.output_dir:
-        config = {
-            "model": args.model,
-            "base_url": base_url,
-            "testset": args.testset,
-            "no_ref_audio": args.no_ref_audio,
-            "lang": args.lang,
-            "speaker": args.speaker,
-            "max_samples": args.max_samples,
-            "max_new_tokens": args.max_new_tokens,
-            "warmup": args.warmup,
-            "max_concurrency": args.max_concurrency,
-            "request_rate": args.request_rate,
-        }
-        save_speed_results(outputs, metrics, config, args.output_dir)
+
+def _config_from_args(args: argparse.Namespace) -> OmniTtsSpeedBenchmarkConfig:
+    return OmniTtsSpeedBenchmarkConfig(
+        base_url=args.base_url,
+        host=args.host,
+        port=args.port,
+        model=args.model,
+        lang=args.lang,
+        speaker=args.speaker,
+        testset=args.testset,
+        no_ref_audio=args.no_ref_audio,
+        output_dir=args.output_dir,
+        max_samples=args.max_samples,
+        max_new_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        warmup=args.warmup,
+        max_concurrency=args.max_concurrency,
+        request_rate=args.request_rate,
+        save_audio=args.save_audio,
+        disable_tqdm=args.disable_tqdm,
+    )
+
+
+async def benchmark(args: argparse.Namespace) -> dict:
+    config = _config_from_args(args)
+    results = await run_omni_tts_speed_benchmark(config)
+    print_speed_summary(results["summary"], config.model)
+    return results
 
 
 def main() -> None:

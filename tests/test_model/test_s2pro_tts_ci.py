@@ -24,7 +24,6 @@ import asyncio
 import json
 import os
 import shutil
-import statistics
 import subprocess
 import sys
 from pathlib import Path
@@ -37,7 +36,10 @@ from benchmarks.eval.benchmark_tts_speed import (
     run_tts_speed_benchmark,
 )
 from tests.utils import (
+    apply_slack,
     assert_per_request_fields,
+    assert_speed_thresholds,
+    assert_streaming_consistency,
     assert_summary_metrics,
     assert_wer_results,
     find_free_port,
@@ -150,25 +152,12 @@ _VC_STREAM_P95 = {
 }
 
 
-def _apply_slack(
-    p95: dict[int, dict[str, float]],
-    slack_higher: float = THRESHOLD_SLACK_HIGHER,
-    slack_lower: float = THRESHOLD_SLACK_LOWER,
-) -> dict[int, dict[str, float]]:
-    """Derive CI thresholds from P95 references with uniform slack."""
-    result: dict[int, dict[str, float]] = {}
-    for conc, m in p95.items():
-        result[conc] = {
-            "throughput_qps_min": round(m["throughput_qps"] * slack_higher, 2),
-            "tok_per_s_agg_min": round(m["tok_per_s_agg"] * slack_higher, 1),
-            "latency_mean_s_max": round(m["latency_mean_s"] * slack_lower, 1),
-            "rtf_mean_max": round(m["rtf_mean"] * slack_lower, 2),
-        }
-    return result
-
-
-VC_NON_STREAM_THRESHOLDS = _apply_slack(_VC_NON_STREAM_P95)
-VC_STREAM_THRESHOLDS = _apply_slack(_VC_STREAM_P95)
+VC_NON_STREAM_THRESHOLDS = apply_slack(
+    _VC_NON_STREAM_P95, THRESHOLD_SLACK_HIGHER, THRESHOLD_SLACK_LOWER
+)
+VC_STREAM_THRESHOLDS = apply_slack(
+    _VC_STREAM_P95, THRESHOLD_SLACK_HIGHER, THRESHOLD_SLACK_LOWER
+)
 
 WER_SCRIPT = str(
     Path(__file__).resolve().parents[2]
@@ -317,96 +306,6 @@ def wer_input_dirs(server_process: subprocess.Popen) -> dict[str, dict[int, str]
     return SPEED_OUTPUT_DIRS
 
 
-def _assert_streaming_consistency(
-    non_stream_requests: list[dict],
-    stream_requests: list[dict],
-    *,
-    total_completion_token_rtol: float = 0.12,
-    median_completion_token_rtol: float = 0.20,
-    total_audio_duration_rtol: float = 0.12,
-) -> None:
-    """Assert stable invariants on the shared request subset."""
-    ns_by_id = {r["id"]: r for r in non_stream_requests}
-    st_by_id = {r["id"]: r for r in stream_requests}
-    common_ids = sorted(set(ns_by_id) & set(st_by_id))
-    assert common_ids, "No overlapping request IDs between non-stream and stream runs"
-    assert set(st_by_id).issubset(set(ns_by_id)), (
-        "Streaming requests must be a subset of non-streaming requests: "
-        f"non_stream={sorted(ns_by_id)}, stream={sorted(st_by_id)}"
-    )
-    assert len(st_by_id) == STREAMING_BENCHMARK_MAX_SAMPLES, (
-        f"Expected {STREAMING_BENCHMARK_MAX_SAMPLES} streaming requests, "
-        f"got {len(st_by_id)}"
-    )
-
-    ns_completion_tokens: list[int] = []
-    st_completion_tokens: list[int] = []
-    ns_audio_duration_total = 0.0
-    st_audio_duration_total = 0.0
-
-    for rid in common_ids:
-        ns, st = ns_by_id[rid], st_by_id[rid]
-        assert ns["prompt_tokens"] == st["prompt_tokens"], (
-            f"Request {rid}: prompt_tokens mismatch — "
-            f"non_stream={ns['prompt_tokens']}, stream={st['prompt_tokens']}"
-        )
-        ns_completion_tokens.append(ns["completion_tokens"])
-        st_completion_tokens.append(st["completion_tokens"])
-        ns_audio_duration_total += ns["audio_duration_s"]
-        st_audio_duration_total += st["audio_duration_s"]
-
-    ns_completion_total = sum(ns_completion_tokens)
-    st_completion_total = sum(st_completion_tokens)
-    max_completion_total = max(ns_completion_total, st_completion_total)
-    assert abs(ns_completion_total - st_completion_total) <= (
-        total_completion_token_rtol * max_completion_total
-    ), (
-        "Total completion_tokens differ too much — "
-        f"non_stream={ns_completion_total}, stream={st_completion_total} "
-        f"(rtol={total_completion_token_rtol})"
-    )
-
-    ns_completion_median = statistics.median(ns_completion_tokens)
-    st_completion_median = statistics.median(st_completion_tokens)
-    max_completion_median = max(ns_completion_median, st_completion_median)
-    assert abs(ns_completion_median - st_completion_median) <= (
-        median_completion_token_rtol * max_completion_median
-    ), (
-        "Median completion_tokens differ too much — "
-        f"non_stream={ns_completion_median}, stream={st_completion_median} "
-        f"(rtol={median_completion_token_rtol})"
-    )
-
-    max_audio_duration_total = max(ns_audio_duration_total, st_audio_duration_total)
-    assert abs(ns_audio_duration_total - st_audio_duration_total) <= (
-        total_audio_duration_rtol * max_audio_duration_total
-    ), (
-        "Total audio_duration_s differs too much — "
-        f"non_stream={ns_audio_duration_total}, stream={st_audio_duration_total} "
-        f"(rtol={total_audio_duration_rtol})"
-    )
-
-
-def _assert_speed_thresholds(summary: dict, thresholds: dict, concurrency: int) -> None:
-    level_thresholds = thresholds[concurrency]
-    assert summary["throughput_qps"] >= level_thresholds["throughput_qps_min"], (
-        f"throughput_qps {summary['throughput_qps']} < "
-        f"{level_thresholds['throughput_qps_min']} at concurrency {concurrency}"
-    )
-    assert summary["tok_per_s_agg"] >= level_thresholds["tok_per_s_agg_min"], (
-        f"tok_per_s_agg {summary['tok_per_s_agg']} < "
-        f"{level_thresholds['tok_per_s_agg_min']} at concurrency {concurrency}"
-    )
-    assert summary["latency_mean_s"] <= level_thresholds["latency_mean_s_max"], (
-        f"latency_mean_s {summary['latency_mean_s']} > "
-        f"{level_thresholds['latency_mean_s_max']} at concurrency {concurrency}"
-    )
-    assert summary["rtf_mean"] <= level_thresholds["rtf_mean_max"], (
-        f"rtf_mean {summary['rtf_mean']} > "
-        f"{level_thresholds['rtf_mean_max']} at concurrency {concurrency}"
-    )
-
-
 @pytest.mark.benchmark
 def test_voice_cloning_non_streaming(
     server_process: subprocess.Popen,
@@ -431,7 +330,7 @@ def test_voice_cloning_non_streaming(
         assert_per_request_fields(per_request)
         PER_REQUEST_STORE[f"vc_nonstream_c{concurrency}"] = per_request
         SPEED_OUTPUT_DIRS["non_stream"][concurrency] = output_dir
-        _assert_speed_thresholds(summary, VC_NON_STREAM_THRESHOLDS, concurrency)
+        assert_speed_thresholds(summary, VC_NON_STREAM_THRESHOLDS, concurrency)
 
 
 @pytest.mark.benchmark
@@ -462,7 +361,7 @@ def test_voice_cloning_streaming(
         assert_per_request_fields(per_request)
         PER_REQUEST_STORE[f"vc_stream_c{concurrency}"] = per_request
         SPEED_OUTPUT_DIRS["stream"][concurrency] = output_dir
-        _assert_speed_thresholds(summary, VC_STREAM_THRESHOLDS, concurrency)
+        assert_speed_thresholds(summary, VC_STREAM_THRESHOLDS, concurrency)
 
 
 @pytest.mark.benchmark
@@ -474,7 +373,9 @@ def test_voice_cloning_streaming_consistency(
         st = PER_REQUEST_STORE.get(f"vc_stream_c{concurrency}")
         assert ns is not None, f"vc_nonstream_c{concurrency} results missing"
         assert st is not None, f"vc_stream_c{concurrency} results missing"
-        _assert_streaming_consistency(ns, st)
+        assert_streaming_consistency(
+            ns, st, expected_stream_count=STREAMING_BENCHMARK_MAX_SAMPLES
+        )
 
 
 @pytest.mark.benchmark

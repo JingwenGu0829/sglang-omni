@@ -10,6 +10,7 @@ and concurrency of vocoder.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
@@ -19,8 +20,14 @@ import pytest
 
 from benchmarks.benchmarker.utils import wait_for_service
 from benchmarks.dataset.prepare import DATASETS, download_dataset
+from benchmarks.eval.benchmark_omni_tts_speed import (
+    OmniTtsSpeedBenchmarkConfig,
+    run_omni_tts_speed_benchmark,
+)
 from tests.utils import (
+    apply_slack,
     assert_per_request_fields,
+    assert_speed_thresholds,
     assert_summary_metrics,
     assert_wer_results,
     disable_proxy,
@@ -39,7 +46,6 @@ CONCURRENCY = 1
 MAX_SAMPLES = 10
 
 STARTUP_TIMEOUT = 900
-BENCHMARK_TIMEOUT = 600
 WER_TIMEOUT = 600
 
 # Note (Chenyang): P95 values measured on H20 CI machines with concurrency=1,
@@ -62,35 +68,12 @@ _VC_NON_STREAM_P95 = {
 THRESHOLD_SLACK_HIGHER = 0.75
 THRESHOLD_SLACK_LOWER = 1.25
 
-
-def _apply_slack(
-    p95: dict[int, dict[str, float]],
-    slack_higher: float = THRESHOLD_SLACK_HIGHER,
-    slack_lower: float = THRESHOLD_SLACK_LOWER,
-) -> dict[int, dict[str, float]]:
-    """Derive CI thresholds from P95 references with uniform slack."""
-    result: dict[int, dict[str, float]] = {}
-    for conc, m in p95.items():
-        result[conc] = {
-            "throughput_qps_min": round(m["throughput_qps"] * slack_higher, 2),
-            "tok_per_s_agg_min": round(m["tok_per_s_agg"] * slack_higher, 1),
-            "latency_mean_s_max": round(m["latency_mean_s"] * slack_lower, 1),
-            "rtf_mean_max": round(m["rtf_mean"] * slack_lower, 2),
-        }
-    return result
-
-
-VC_NON_STREAM_THRESHOLDS = _apply_slack(_VC_NON_STREAM_P95)
+VC_NON_STREAM_THRESHOLDS = apply_slack(
+    _VC_NON_STREAM_P95, THRESHOLD_SLACK_HIGHER, THRESHOLD_SLACK_LOWER
+)
 
 VC_WER_MAX_CORPUS = 0.06
 VC_WER_MAX_PER_SAMPLE = 0.30
-
-SPEED_SCRIPT = str(
-    Path(__file__).resolve().parents[2]
-    / "benchmarks"
-    / "eval"
-    / "benchmark_omni_tts_speed.py"
-)
 
 WER_SCRIPT = str(
     Path(__file__).resolve().parents[2]
@@ -104,42 +87,15 @@ def _run_benchmark(
     port: int,
     testset: str,
     output_dir: str,
-    extra_args: list[str] | None = None,
 ) -> dict:
-    cmd = [
-        sys.executable,
-        SPEED_SCRIPT,
-        "--model",
-        "qwen3-omni",
-        "--port",
-        str(port),
-        "--testset",
-        testset,
-        "--max-samples",
-        str(MAX_SAMPLES),
-        "--output-dir",
-        output_dir,
-    ]
-    if extra_args:
-        cmd.extend(extra_args)
-
-    proc_result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=BENCHMARK_TIMEOUT,
-        env=no_proxy_env(),
+    config = OmniTtsSpeedBenchmarkConfig(
+        model="qwen3-omni",
+        port=port,
+        testset=testset,
+        output_dir=output_dir,
+        max_samples=MAX_SAMPLES,
     )
-    assert proc_result.returncode == 0, (
-        f"Benchmark failed (rc={proc_result.returncode}).\n"
-        f"stdout:\n{proc_result.stdout}\nstderr:\n{proc_result.stderr}"
-    )
-
-    results_path = Path(output_dir) / "speed_results.json"
-    assert results_path.exists(), f"Results file not found: {results_path}"
-
-    with open(results_path) as f:
-        speed_results = json.load(f)
+    speed_results = asyncio.run(run_omni_tts_speed_benchmark(config))
     assert (
         "summary" in speed_results
     ), f"Missing 'summary' key in results. Keys: {list(speed_results.keys())}"
@@ -247,26 +203,6 @@ def _run_wer_transcribe(
     return wer_results
 
 
-def _assert_speed_thresholds(summary: dict, thresholds: dict, concurrency: int) -> None:
-    level_thresholds = thresholds[concurrency]
-    assert summary["throughput_qps"] >= level_thresholds["throughput_qps_min"], (
-        f"throughput_qps {summary['throughput_qps']} < "
-        f"{level_thresholds['throughput_qps_min']} at concurrency {concurrency}"
-    )
-    assert summary["tok_per_s_agg"] >= level_thresholds["tok_per_s_agg_min"], (
-        f"tok_per_s_agg {summary['tok_per_s_agg']} < "
-        f"{level_thresholds['tok_per_s_agg_min']} at concurrency {concurrency}"
-    )
-    assert summary["latency_mean_s"] <= level_thresholds["latency_mean_s_max"], (
-        f"latency_mean_s {summary['latency_mean_s']} > "
-        f"{level_thresholds['latency_mean_s_max']} at concurrency {concurrency}"
-    )
-    assert summary["rtf_mean"] <= level_thresholds["rtf_mean_max"], (
-        f"rtf_mean {summary['rtf_mean']} > "
-        f"{level_thresholds['rtf_mean_max']} at concurrency {concurrency}"
-    )
-
-
 @pytest.fixture(scope="module")
 def dataset_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("seed_tts_eval") / "data"
@@ -369,7 +305,7 @@ def test_voice_cloning_non_streaming(
     summary, per_request = results["summary"], results["per_request"]
     assert_summary_metrics(summary)
     assert_per_request_fields(per_request)
-    _assert_speed_thresholds(summary, VC_NON_STREAM_THRESHOLDS, CONCURRENCY)
+    assert_speed_thresholds(summary, VC_NON_STREAM_THRESHOLDS, CONCURRENCY)
 
 
 @pytest.mark.benchmark
