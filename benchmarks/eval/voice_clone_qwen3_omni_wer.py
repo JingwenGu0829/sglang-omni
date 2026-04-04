@@ -5,13 +5,19 @@ Generates speech via /v1/chat/completions with modalities: ["text", "audio"],
 then evaluates WER using Whisper (EN) or FunASR (ZH).
 
 Usage:
-    # All-in-one (generate + transcribe)
+
+    1. Generate audio and transcribe all at once
+
     python benchmarks/eval/voice_clone_qwen3_omni_wer.py \
         --meta seedtts_testset/en/meta.lst \
         --output-dir results/qwen3_omni_en \
         --lang en --max-samples 50
 
-    # Two-phase (for CI — kill server between phases to avoid OOM)
+    2. Generate audio and then transcribe separately
+
+    Note (Jingwen, Chenyang): we separate the generate and
+    transcribe phases for CI to avoid OOM.
+
     python benchmarks/eval/voice_clone_qwen3_omni_wer.py \
         --generate-only --meta seedtts_testset/en/meta.lst \
         --output-dir results/qwen3_omni_en --max-samples 10
@@ -61,7 +67,7 @@ async def generate_audio(args: argparse.Namespace) -> list[dict]:
     api_url = f"{base_url}/v1/chat/completions"
 
     samples = load_seedtts_samples(args.meta, args.max_samples)
-    logger.info("Loaded %d samples from %s", len(samples), args.meta)
+    logger.info(f"Loaded {len(samples)} samples from {args.meta}")
 
     audio_dir = os.path.join(args.output_dir, "audio")
     os.makedirs(audio_dir, exist_ok=True)
@@ -96,28 +102,21 @@ async def generate_audio(args: argparse.Namespace) -> list[dict]:
                 entry["audio_duration_s"] = round(wav_info.duration, 4)
                 entry["is_success"] = True
                 logger.info(
-                    "[%d/%d] Generated %.1fs audio for %s",
-                    i + 1,
-                    len(samples),
-                    wav_info.duration,
-                    sample.sample_id,
+                    f"[{i + 1}/{len(samples)}] Generated {wav_info.duration:.1f}s "
+                    f"audio for {sample.sample_id}",
                 )
             except Exception as exc:
                 entry["is_success"] = False
                 entry["error"] = str(exc)
                 logger.warning(
-                    "[%d/%d] FAILED %s: %s",
-                    i + 1,
-                    len(samples),
-                    sample.sample_id,
-                    exc,
+                    f"[{i + 1}/{len(samples)}] FAILED {sample.sample_id}: {exc}",
                 )
             generated.append(entry)
 
     meta_path = os.path.join(args.output_dir, "generated.json")
     with open(meta_path, "w") as f:
         json.dump(generated, f, indent=2, ensure_ascii=False)
-    logger.info("Saved generation metadata to %s", meta_path)
+    logger.info(f"Saved generation metadata to {meta_path}")
     return generated
 
 
@@ -125,17 +124,17 @@ def transcribe_audio(args: argparse.Namespace) -> None:
     """Load ASR model, transcribe saved audio, compute and save WER."""
     if "cuda" in args.device:
         torch.cuda.set_device(args.device)
-        logger.info("Set ASR CUDA device to %s", args.device)
+        logger.info(f"Set ASR CUDA device to {args.device}")
 
     meta_path = os.path.join(args.output_dir, "generated.json")
     with open(meta_path) as f:
         generated: list[dict] = json.load(f)
-    logger.info("Loaded %d entries from %s", len(generated), meta_path)
+    logger.info(f"Loaded {len(generated)} entries from {meta_path}")
 
     asr = load_asr_model(args.lang, args.device)
 
     outputs: list[SampleOutput] = []
-    for i, entry in enumerate(tqdm(generated, desc=f"Transcribing ({args.lang})")):
+    for i, entry in enumerate(tqdm(generated, desc=f"Transcribing {args.lang}")):
         output = SampleOutput(
             sample_id=entry["sample_id"],
             target_text=entry["target_text"],
@@ -160,20 +159,11 @@ def transcribe_audio(args: argparse.Namespace) -> None:
 
         if output.is_success:
             logger.info(
-                "[%d/%d] WER=%.3f  ref=%s  hyp=%s",
-                i + 1,
-                len(generated),
-                output.wer,
-                output.ref_norm[:50],
-                output.hyp_norm[:50],
+                f"[{i + 1}/{len(generated)}] WER={output.wer:.3f}  ref={output.ref_norm[:50]}  hyp={output.hyp_norm[:50]}",
             )
         else:
             logger.warning(
-                "[%d/%d] Transcription failed: %s -- %s",
-                i + 1,
-                len(generated),
-                entry["sample_id"],
-                output.error,
+                f"[{i + 1}/{len(generated)}] Transcription failed: {entry['sample_id']} -- {output.error}",
             )
 
     metrics = calculate_wer_metrics(outputs, args.lang)
@@ -193,7 +183,7 @@ async def main_async(args: argparse.Namespace) -> None:
     """Run both phases in one shot (original behavior)."""
     if "cuda" in args.asr_device:
         torch.cuda.set_device(args.asr_device)
-        logger.info("Set ASR CUDA device to %s", args.asr_device)
+        logger.info(f"Set ASR CUDA device to {args.asr_device}")
 
     base_url = f"http://{args.host}:{args.port}"
     api_url = f"{base_url}/v1/chat/completions"
@@ -204,7 +194,7 @@ async def main_async(args: argparse.Namespace) -> None:
     asr = load_asr_model(args.lang, args.asr_device)
 
     samples = load_seedtts_samples(args.meta, args.max_samples)
-    logger.info("Loaded %d samples from %s", len(samples), args.meta)
+    logger.info(f"Loaded {len(samples)} samples from {args.meta}")
 
     audio_dir = os.path.join(args.output_dir, "audio")
     os.makedirs(audio_dir, exist_ok=True)
@@ -231,20 +221,11 @@ async def main_async(args: argparse.Namespace) -> None:
 
             if result.is_success:
                 logger.info(
-                    "[%d/%d] WER=%.3f  target=%.50s  whisper=%.50s",
-                    i + 1,
-                    len(samples),
-                    result.wer,
-                    result.ref_norm,
-                    result.hyp_norm,
+                    f"[{i + 1}/{len(samples)}] WER={result.wer:.3f}  target={result.ref_norm[:50]}  whisper={result.hyp_norm[:50]}",
                 )
             else:
                 logger.warning(
-                    "[%d/%d] FAILED: %s -- %s",
-                    i + 1,
-                    len(samples),
-                    sample.sample_id,
-                    result.error,
+                    f"[{i + 1}/{len(samples)}] FAILED: {sample.sample_id} -- {result.error}",
                 )
 
     metrics = calculate_wer_metrics(outputs, args.lang)
@@ -263,7 +244,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(
-        description="WER evaluation for Qwen3-Omni TTS via sglang-omni server"
+        description="WER evaluation for Qwen3-Omni TTS via sglang-omni server",
     )
     p.add_argument("--meta", default="seedtts_testset/en/meta.lst")
     p.add_argument(
@@ -283,15 +264,22 @@ def main() -> None:
         help="Speaker voice for Qwen3-Omni TTS",
     )
     p.add_argument(
-        "--lang", choices=["en", "zh"], default="en", help="Language for ASR model"
+        "--lang",
+        choices=["en", "zh"],
+        default="en",
+        help="Language for ASR model",
     )
     p.add_argument("--host", type=str, default="localhost", help="Server host")
     p.add_argument("--port", type=int, default=8000, help="Server port")
     p.add_argument(
-        "--asr-device", default="cuda:0", help="Device for ASR (Whisper) model"
+        "--asr-device",
+        default="cuda:0",
+        help="Device for ASR (Whisper) model",
     )
     p.add_argument(
-        "--device", default="cuda:0", help="Device for ASR model (transcribe-only mode)"
+        "--device",
+        default="cuda:0",
+        help="Device for ASR model (transcribe-only mode)",
     )
     p.add_argument("--max-samples", type=int, default=None)
     p.add_argument(

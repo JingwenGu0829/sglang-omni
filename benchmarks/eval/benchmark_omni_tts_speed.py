@@ -97,8 +97,13 @@ def make_omni_tts_send_fn(
             if usage:
                 result.prompt_tokens = usage.get("prompt_tokens", 0)
                 result.completion_tokens = usage.get("completion_tokens", 0)
-            # Omni chat completions has no X-Engine-Time header;
-            # use request elapsed time as engine_time_s proxy.
+
+            # Note (chenyang): engine_time_s should be the time taken by
+            # the engine. Current omni chat completions has no X-Engine-Time
+            # header, so we use request elapsed time as engine_time_s proxy.
+            # This shall largely affect the results at high concurrency,
+            # since the wait time is included in the request elapsed time.
+
             result.engine_time_s = elapsed
             if result.completion_tokens > 0 and result.engine_time_s > 0:
                 result.tok_per_s = result.completion_tokens / result.engine_time_s
