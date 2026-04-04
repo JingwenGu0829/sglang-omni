@@ -527,6 +527,8 @@ def create_talker_ar_executor(
         if fn is not None:
             fn(request_id, chunk_data, CODE_PREDICTOR_STAGE, metadata=metadata)
 
+    # Note (Chenyang): Talker input mixes text tokens with projected thinker
+    # hidden states, so prefix-based radix caching does not apply.
     server_args.disable_radix_cache = True
 
     stream_adapter = (

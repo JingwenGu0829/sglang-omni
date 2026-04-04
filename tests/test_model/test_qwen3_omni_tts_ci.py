@@ -302,6 +302,9 @@ def test_voice_cloning_non_streaming(
         str(tmp_path / "vc_nonstream"),
     )
     summary, per_request = results["summary"], results["per_request"]
+    # TODO(Chenyang): Voice-cloning uses the Code2Wav executor path which
+    # bypasses standard chat completions usage tracking; token counts are
+    # not available yet.
     assert_summary_metrics(summary, check_tokens=False)
     assert_per_request_fields(per_request, check_tokens=False)
     assert (

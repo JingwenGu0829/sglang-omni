@@ -394,6 +394,9 @@ class SGLangOutputProcessor:
                 result = {}
                 for layer_id, tensor in zip(self._capture_hidden_layers, aux):
                     key = "embed" if layer_id == 0 else layer_id
+                    # Note (Chenyang): clone() is required because the captured
+                    # hidden states reference the model's internal buffer, which
+                    # gets overwritten on the next forward pass.
                     result[key] = tensor.clone()
                 return result
 

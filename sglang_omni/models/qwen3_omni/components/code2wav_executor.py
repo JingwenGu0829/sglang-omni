@@ -196,6 +196,9 @@ class _Code2WavStreamingExecutor(Executor):
     ) -> np.ndarray:
         if self._device.type == "cpu":
             return self._decode_incremental(code_chunks, start_index, end_index)
+        # Note (Chenyang): This lock serializes all GPU decode/predict ops across
+        # requests — a correctness-over-throughput trade-off. For higher throughput,
+        # consider CUDA streams or batched inference to allow concurrent GPU work.
         async with self._gpu_lock:
             return await loop.run_in_executor(
                 None,

@@ -129,6 +129,35 @@ def _mount_profiler_routes(
     app.include_router(router)
 
 
+async def _build_app_and_serve(
+    coordinator,
+    *,
+    model_name: str,
+    host: str,
+    port: int,
+    log_level: str,
+    client_kwargs: dict[str, Any] | None = None,
+    stage_endpoints: dict[str, str] | None = None,
+) -> None:
+    """Create Client + FastAPI app + uvicorn server and serve.
+
+    When *stage_endpoints* is provided, profiler routes are mounted
+    (requires all stages to be reachable from this process).
+    """
+    cl_kwargs = client_kwargs or {}
+    client = Client(coordinator, **cl_kwargs)
+    app = create_app(client, model_name=model_name)
+
+    if stage_endpoints is not None:
+        profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
+        profiler_ctl = ProfilerControlClient(stage_endpoints)
+        _mount_profiler_routes(app, profiler_ctl, profiler_dir)
+
+    config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
 async def _run_server(
     pipeline_config: PipelineConfig,
     *,
@@ -146,14 +175,15 @@ async def _run_server(
     port = _find_available_port(host, port)
 
     gpu_ids = set(pipeline_config.gpu_placement.values())
-    needs_mp = len(gpu_ids) > 1
+    need_multi_process = len(gpu_ids) > 1
+    resolved_name = model_name or pipeline_config.name
     logger.info(
         "GPU placement: %s → %s",
         dict(pipeline_config.gpu_placement),
-        "multi-process" if needs_mp else "single-process",
+        "multi-process" if need_multi_process else "single-process",
     )
 
-    if needs_mp:
+    if need_multi_process:
         from sglang_omni.pipeline.mp_runner import MultiProcessPipelineRunner
 
         mp_runner = MultiProcessPipelineRunner(pipeline_config)
@@ -167,16 +197,18 @@ async def _run_server(
         )
 
         try:
-            cl_kwargs = client_kwargs or {}
-            client = Client(coordinator, **cl_kwargs)
-            app = create_app(
-                client,
-                model_name=model_name or pipeline_config.name,
+            # Note (Chenyang): Profiler routes are not mounted in multi-process
+            # mode because stages run in separate processes and their control
+            # plane endpoints are not directly reachable from the HTTP server
+            # process. Pass stage_endpoints=None to skip profiler setup.
+            await _build_app_and_serve(
+                coordinator,
+                model_name=resolved_name,
+                host=host,
+                port=port,
+                log_level=log_level,
+                client_kwargs=client_kwargs,
             )
-
-            config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
-            server = uvicorn.Server(config)
-            await server.serve()
         finally:
             logger.info("Shutting down pipeline …")
             await mp_runner.stop()
@@ -196,23 +228,15 @@ async def _run_server(
         )
 
         try:
-            # 3. Build Client -> FastAPI app
-            cl_kwargs = client_kwargs or {}
-            client = Client(coordinator, **cl_kwargs)
-            app = create_app(
-                client,
-                model_name=model_name or pipeline_config.name,
+            await _build_app_and_serve(
+                coordinator,
+                model_name=resolved_name,
+                host=host,
+                port=port,
+                log_level=log_level,
+                client_kwargs=client_kwargs,
+                stage_endpoints=stage_endpoints,
             )
-
-            profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
-            profiler_ctl = ProfilerControlClient(stage_endpoints)
-            _mount_profiler_routes(app, profiler_ctl, profiler_dir)
-
-            # 4. Run uvicorn
-            config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
-            server = uvicorn.Server(config)
-
-            await server.serve()
         finally:
             logger.info("Shutting down pipeline …")
             await runner.stop()
