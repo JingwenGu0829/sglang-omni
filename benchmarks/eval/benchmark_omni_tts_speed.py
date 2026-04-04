@@ -97,8 +97,11 @@ def make_omni_tts_send_fn(
             if usage:
                 result.prompt_tokens = usage.get("prompt_tokens", 0)
                 result.completion_tokens = usage.get("completion_tokens", 0)
-            if result.completion_tokens > 0 and elapsed > 0:
-                result.tok_per_s = result.completion_tokens / elapsed
+            # Omni chat completions has no X-Engine-Time header;
+            # use request elapsed time as engine_time_s proxy.
+            result.engine_time_s = elapsed
+            if result.completion_tokens > 0 and result.engine_time_s > 0:
+                result.tok_per_s = result.completion_tokens / result.engine_time_s
 
             if save_audio_dir:
                 path = os.path.join(save_audio_dir, f"{result.request_id}.wav")

@@ -51,6 +51,8 @@ THRESHOLD_SLACK_LOWER = 1.25
 # seedtts-mini dataset (5 samples). Update these when hardware or model changes.
 _VC_NON_STREAM_P95 = {
     1: {
+        "throughput_qps": 0.17,
+        "tok_per_s_agg": 2.3,
         "latency_mean_s": 6.0,
         "rtf_mean": 2.0,
     },
@@ -66,6 +68,8 @@ def _apply_slack(
     result: dict[int, dict[str, float]] = {}
     for conc, m in p95.items():
         result[conc] = {
+            "throughput_qps_min": round(m["throughput_qps"] * slack_higher, 2),
+            "tok_per_s_agg_min": round(m["tok_per_s_agg"] * slack_higher, 1),
             "latency_mean_s_max": round(m["latency_mean_s"] * slack_lower, 1),
             "rtf_mean_max": round(m["rtf_mean"] * slack_lower, 2),
         }
@@ -241,6 +245,14 @@ def _run_wer_transcribe(
 
 def _assert_speed_thresholds(summary: dict, thresholds: dict, concurrency: int) -> None:
     level_thresholds = thresholds[concurrency]
+    assert summary["throughput_qps"] >= level_thresholds["throughput_qps_min"], (
+        f"throughput_qps {summary['throughput_qps']} < "
+        f"{level_thresholds['throughput_qps_min']} at concurrency {concurrency}"
+    )
+    assert summary["tok_per_s_agg"] >= level_thresholds["tok_per_s_agg_min"], (
+        f"tok_per_s_agg {summary['tok_per_s_agg']} < "
+        f"{level_thresholds['tok_per_s_agg_min']} at concurrency {concurrency}"
+    )
     assert summary["latency_mean_s"] <= level_thresholds["latency_mean_s_max"], (
         f"latency_mean_s {summary['latency_mean_s']} > "
         f"{level_thresholds['latency_mean_s_max']} at concurrency {concurrency}"
