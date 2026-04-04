@@ -4,6 +4,7 @@
 Usage:
     python -m benchmarks.dataset.prepare --dataset seedtts
     python -m benchmarks.dataset.prepare --dataset seedtts-mini
+    python -m benchmarks.dataset.prepare --dataset seedtts-50
 """
 
 from __future__ import annotations
@@ -18,16 +19,24 @@ logger = logging.getLogger(__name__)
 DATASETS = {
     "seedtts": "zhaochenyang20/seed-tts-eval",
     "seedtts-mini": "zhaochenyang20/seed-tts-eval-mini",
+    "seedtts-50": "Ratish21/seed-tts-eval-50",
 }
 
 
-def download_dataset(repo_id: str, local_dir: str = "seedtts_testset") -> None:
+def download_dataset(
+    repo_id: str,
+    local_dir: str = "seedtts_testset",
+    *,
+    quiet: bool = False,
+) -> None:
     meta_en = os.path.join(local_dir, "en", "meta.lst")
     if os.path.exists(meta_en):
-        logger.info("Dataset already exists at %s, skipping download.", local_dir)
+        if not quiet:
+            logger.info("Dataset already exists at %s, skipping download.", local_dir)
         return
 
-    logger.info("Downloading %s to %s ...", repo_id, local_dir)
+    if not quiet:
+        logger.info("Downloading %s to %s ...", repo_id, local_dir)
     cmd = [
         "huggingface-cli",
         "download",
@@ -37,8 +46,16 @@ def download_dataset(repo_id: str, local_dir: str = "seedtts_testset") -> None:
         "--local-dir",
         local_dir,
     ]
-    subprocess.run(cmd, check=True)
-    logger.info("Dataset downloaded to %s", local_dir)
+    try:
+        subprocess.run(cmd, check=True, capture_output=quiet, text=True)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"Failed to download dataset {repo_id} to {local_dir}.\n"
+            f"stdout:\n{exc.stdout}\n"
+            f"stderr:\n{exc.stderr}"
+        ) from exc
+    if not quiet:
+        logger.info("Dataset downloaded to %s", local_dir)
 
 
 def main() -> None:
