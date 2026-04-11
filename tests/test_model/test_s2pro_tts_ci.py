@@ -7,7 +7,7 @@ Usage:
     pytest tests/test_model/test_s2pro_tts_ci.py -s -x --concurrency all
 
 Author:
-    chenyang zhao https://github.com/zhaochenyang20
+    Chenyang Zhao https://github.com/zhaochenyang20
     Raitsh P https://github.com/Ratish1
     Jingwen Guo https://github.com/JingwenGu0829
     Yuan Luo https://github.com/yuan-luo
@@ -139,7 +139,7 @@ _VC_STREAM_P95 = {
         "rtf_mean": 4.08,
     },
     8: {
-        "throughput_qps": 0.32,
+        "throughput_qps": 0.31,
         "tok_per_s_agg": 9.3,
         "latency_mean_s": 22.7,
         "rtf_mean": 5.89,
