@@ -71,6 +71,8 @@ print(result["choices"][0]["message"]["content"])
 
 Send an audio file together with an image. The audio contains the spoken question ("How many cars are there in the picture?") and the model answers based on both inputs.
 
+> **Note:** Set `"content": ""` (empty string) on the user message when all semantic content comes from audio, video, or images rather than text.
+
 **cURL**
 
 ```bash
@@ -210,6 +212,53 @@ resp = requests.post(
         "messages": [{"role": "user", "content": ""}],
         "images": ["tests/data/cars.jpg"],
         "audios": ["tests/data/query_to_cars.wav"],
+        "modalities": ["text", "audio"],
+        "max_tokens": 16,
+    },
+)
+resp.raise_for_status()
+result = resp.json()
+choice = result["choices"][0]["message"]
+
+print(choice["content"])
+
+audio_data = base64.b64decode(choice["audio"]["data"])
+with open("output.wav", "wb") as f:
+    f.write(audio_data)
+```
+
+### Video and Audio Input
+
+Send a video with a spoken audio question. The model watches the video, hears the question, and responds with both text and audio.
+
+**cURL**
+
+```bash
+curl -X POST http://localhost:8008/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3-omni",
+    "messages": [{"role": "user", "content": ""}],
+    "videos": ["tests/data/draw.mp4"],
+    "audios": ["tests/data/query_to_draw.wav"],
+    "modalities": ["text", "audio"],
+    "max_tokens": 16
+  }'
+```
+
+**Python**
+
+```python
+import base64
+import requests
+
+resp = requests.post(
+    "http://localhost:8008/v1/chat/completions",
+    json={
+        "model": "qwen3-omni",
+        "messages": [{"role": "user", "content": ""}],
+        "videos": ["tests/data/draw.mp4"],
+        "audios": ["tests/data/query_to_draw.wav"],
         "modalities": ["text", "audio"],
         "max_tokens": 16,
     },
