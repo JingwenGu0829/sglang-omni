@@ -13,10 +13,6 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# Picklable specification — built in the main process
-# ---------------------------------------------------------------------------
-
 
 @dataclass
 class StageProcessSpec:
@@ -61,11 +57,6 @@ class StageProcessSpec:
 
     # Fusion name map
     name_map: dict[str, str] = field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
-# Subprocess entrypoint
-# ---------------------------------------------------------------------------
 
 
 def stage_process_main(

@@ -35,11 +35,6 @@ from sglang_omni.pipeline.stage_process_v2 import StageProcessSpec
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Spec builder — turns PipelineConfig into a list of StageGroups
-# ---------------------------------------------------------------------------
-
-
 def _build_stage_groups(config: PipelineConfig) -> list[StageGroup]:
     """Compile *config* into one :class:`StageGroup` per logical stage.
 
@@ -123,11 +118,6 @@ def _build_stage_groups(config: PipelineConfig) -> list[StageGroup]:
     return groups
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _resolve_gpu_ids(stage_cfg: StageConfig, config: PipelineConfig) -> list[int]:
     """Return the list of GPU ids for *stage_cfg* (one per TP rank)."""
     placement = config.gpu_placement.get(stage_cfg.name)
@@ -196,11 +186,6 @@ class _NcclPortAllocator:
                     return port
             except OSError:
                 continue
-
-
-# ---------------------------------------------------------------------------
-# MultiProcessPipelineRunner  (public API — kept compatible)
-# ---------------------------------------------------------------------------
 
 
 class MultiProcessPipelineRunner:

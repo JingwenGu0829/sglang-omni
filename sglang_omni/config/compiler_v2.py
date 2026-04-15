@@ -84,11 +84,6 @@ def _compile_stage(
     )
 
 
-# ------------------------------------------------------------------
-# Routing
-# ------------------------------------------------------------------
-
-
 def _resolve_get_next(stage_cfg: StageConfig, name_map: dict[str, str]):
     """Build a get_next callable from static ``next``."""
     if stage_cfg.terminal:
@@ -106,11 +101,6 @@ def _resolve_get_next(stage_cfg: StageConfig, name_map: dict[str, str]):
     return lambda request_id, output: None
 
 
-# ------------------------------------------------------------------
-# Input handler
-# ------------------------------------------------------------------
-
-
 def _create_input_handler(
     stage_cfg: StageConfig, *, name_map: dict[str, str]
 ) -> InputHandler:
@@ -120,11 +110,6 @@ def _create_input_handler(
     merge_fn = import_string(stage_cfg.merge_fn)
     sources = [name_map.get(n, n) for n in stage_cfg.wait_for]
     return AggregatedInput(sources=set(sources), merge=merge_fn)
-
-
-# ------------------------------------------------------------------
-# Factory args
-# ------------------------------------------------------------------
 
 
 def _resolve_factory_args(
@@ -145,11 +130,6 @@ def _resolve_factory_args(
         args["gpu_id"] = gpu_id
 
     return args
-
-
-# ------------------------------------------------------------------
-# Relay config
-# ------------------------------------------------------------------
 
 
 def _build_relay_config(
@@ -195,11 +175,6 @@ def _parse_gpu_id(device: str) -> int | None:
     if device.startswith("cuda:"):
         return int(device.split(":", 1)[1])
     raise ValueError(f"Unsupported device string: {device}")
-
-
-# ------------------------------------------------------------------
-# Endpoints
-# ------------------------------------------------------------------
 
 
 def _find_free_tcp_ports(start: int, count: int) -> list[int]:
@@ -257,11 +232,6 @@ def _allocate_endpoints(
         return endpoints
 
     raise ValueError(f"Unknown endpoint scheme: {config.endpoints.scheme}")
-
-
-# ------------------------------------------------------------------
-# Stream target wiring
-# ------------------------------------------------------------------
 
 
 def _wire_stream_targets(

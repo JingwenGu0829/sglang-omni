@@ -27,11 +27,6 @@ from sglang_omni.scheduling_v2.messages import IncomingMessage, OutgoingMessage
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Stubs for upstream subsystems we don't use
-# ---------------------------------------------------------------------------
-
-
 class _NoOpSender:
     """Stub for send_to_detokenizer — stream_output handles emission."""
 
@@ -58,11 +53,6 @@ class _NoOpGrammarManager:
 
     def __len__(self) -> int:
         return 0
-
-
-# ---------------------------------------------------------------------------
-# OmniScheduler
-# ---------------------------------------------------------------------------
 
 
 class OmniScheduler:

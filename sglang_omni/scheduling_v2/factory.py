@@ -89,11 +89,6 @@ def _create_sglang_infrastructure(
     )
 
 
-# ---------------------------------------------------------------------------
-# Scheduler factories
-# ---------------------------------------------------------------------------
-
-
 def create_thinker_scheduler(
     server_args: Any,
     gpu_id: int = 0,

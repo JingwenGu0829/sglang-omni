@@ -24,11 +24,6 @@ from sglang_omni.relay.base import Relay
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Tensor extraction / restoration (recursive, nested dicts/lists)
-# ---------------------------------------------------------------------------
-
-
 def extract_tensors(obj: Any, path: str = "") -> tuple[Any, dict[str, torch.Tensor]]:
     """Recursively extract tensors from nested structure, replacing with placeholders."""
     tensors = {}
@@ -79,11 +74,6 @@ def restore_tensors(obj: Any, tensor_dict: dict[str, torch.Tensor]) -> Any:
         return type(obj)(restore_tensors(item, tensor_dict) for item in obj)
     else:
         return obj
-
-
-# ---------------------------------------------------------------------------
-# Payload read/write (full StagePayload via relay)
-# ---------------------------------------------------------------------------
 
 
 async def write_payload(
@@ -180,11 +170,6 @@ async def read_payload(
     return payload
 
 
-# ---------------------------------------------------------------------------
-# Blob read/write (raw tensor via relay, for streaming chunks)
-# ---------------------------------------------------------------------------
-
-
 async def write_blob(
     relay: Relay,
     key: str,
@@ -221,11 +206,6 @@ async def read_blob(
 
     dtype = getattr(torch, dtype_str.replace("torch.", ""))
     return recv_buf.view(dtype).reshape(shape)
-
-
-# ---------------------------------------------------------------------------
-# Stream chunk send (handles same-GPU IPC vs cross-GPU relay)
-# ---------------------------------------------------------------------------
 
 
 def ipc_pickle(obj: Any) -> bytes:
