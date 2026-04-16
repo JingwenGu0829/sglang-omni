@@ -12,7 +12,8 @@ from typing import Iterable, Optional, Tuple
 
 import torch
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
-from sglang.srt.layers.moe.fused_moe_native import moe_forward_native
+from sglang.srt.layers.moe.fused_moe_native import fused_moe_forward_native
+from sglang.srt.layers.moe.token_dispatcher import StandardDispatchOutput
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.utils import add_prefix
 from torch import nn
@@ -237,14 +238,15 @@ class Qwen3OmniMoeTalkerSparseMoeBlock(Qwen3OmniMoeThinkerTextSparseMoeBlock):
         # --- Routed experts (no all-reduce yet) ---
         router_logits, _ = self.gate(linear_hidden_states)
         topk_output = self.topk(linear_hidden_states, router_logits)
-        # Talker parity depends on the native MoE path here. The fused routed-expert
-        # path diverges from HF on exact layer inputs, while the native path matches.
-        routed_output = moe_forward_native(
-            self.experts,
-            linear_hidden_states,
-            topk_output,
-            self.experts.moe_runner_config,
+        dispatch_output = StandardDispatchOutput(
+            hidden_states=linear_hidden_states,
+            hidden_states_scale=None,
+            topk_output=topk_output,
         )
+        routed_output = fused_moe_forward_native(
+            self.experts,
+            dispatch_output,
+        ).hidden_states
 
         # --- Combine then unified all-reduce ---
         final_hidden_states = routed_output + shared_output
