@@ -12,8 +12,6 @@ from typing import Iterable, Optional, Tuple
 
 import torch
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
-from sglang.srt.layers.moe.fused_moe_native import fused_moe_forward_native
-from sglang.srt.layers.moe.token_dispatcher import StandardDispatchOutput
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.utils import add_prefix
 from torch import nn
@@ -230,7 +228,6 @@ class Qwen3OmniMoeTalkerSparseMoeBlock(Qwen3OmniMoeThinkerTextSparseMoeBlock):
             linear_hidden_states = linear_hidden_states.to(dtype=linear_dtype)
 
         # Shared branch must consume the original MLP input before routed experts.
-        # The fused MoE implementation mutates `hidden_states` in-place.
         shared_output = self.shared_expert(linear_hidden_states)
         shared_gate, _ = self.shared_expert_gate(linear_hidden_states)
         shared_output = shared_output * torch.sigmoid(shared_gate)
@@ -238,15 +235,7 @@ class Qwen3OmniMoeTalkerSparseMoeBlock(Qwen3OmniMoeThinkerTextSparseMoeBlock):
         # --- Routed experts (no all-reduce yet) ---
         router_logits, _ = self.gate(linear_hidden_states)
         topk_output = self.topk(linear_hidden_states, router_logits)
-        dispatch_output = StandardDispatchOutput(
-            hidden_states=linear_hidden_states,
-            hidden_states_scale=None,
-            topk_output=topk_output,
-        )
-        routed_output = fused_moe_forward_native(
-            self.experts,
-            dispatch_output,
-        ).hidden_states
+        routed_output = self.experts(linear_hidden_states, topk_output)
 
         # --- Combine then unified all-reduce ---
         final_hidden_states = routed_output + shared_output
